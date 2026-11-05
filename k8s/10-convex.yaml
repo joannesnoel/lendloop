@@ -1,0 +1,127 @@
+# Self-hosted Convex backend: the database, the functions in convex/, and the
+# HTTP endpoints n8n calls. Single replica with SQLite on a Longhorn volume.
+#
+#   3210  client API (queries, mutations, websocket sync) - public under /api
+#   3211  HTTP actions (/n8n/...) - reachable only inside the cluster
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: convex-data
+  namespace: lendloop
+spec:
+  accessModes: ["ReadWriteOnce"]
+  # explicit: the cluster has two default StorageClasses (local-path and longhorn)
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: convex
+  namespace: lendloop
+  labels:
+    app: convex
+spec:
+  replicas: 1
+  # SQLite on an RWO volume: never run two pods against it
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: convex
+  template:
+    metadata:
+      labels:
+        app: convex
+    spec:
+      # a Service named "convex" would otherwise inject CONVEX_PORT=tcp://...
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: convex
+          # Pinned to the build the functions were developed and tested against
+          # (2026-10-22). Upgrade by changing the tag; migrations run on start.
+          image: ghcr.io/convex/convex-backend:1447815c8c697c55a35ab0fff64aa7580ca01cc8
+          ports:
+            - name: api
+              containerPort: 3210
+            - name: http-actions
+              containerPort: 3211
+          env:
+            - name: INSTANCE_NAME
+              value: lendloop
+            # Admin keys are derived from this. Changing it invalidates them.
+            - name: INSTANCE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: lendloop-secrets
+                  key: convex-instance-secret
+            # How browsers reach the client API (the ingress routes /api here).
+            - name: CONVEX_CLOUD_ORIGIN
+              value: https://lendloop.creativelogik.net
+            # HTTP actions are only served inside the cluster.
+            - name: CONVEX_SITE_ORIGIN
+              value: http://convex.lendloop.svc.cluster.local:3211
+            # Keep server logs and stack traces out of browser consoles.
+            - name: REDACT_LOGS_TO_CLIENT
+              value: "true"
+            - name: DISABLE_BEACON
+              value: "true"
+          volumeMounts:
+            - name: data
+              mountPath: /convex/data
+          lifecycle:
+            preStop:
+              exec:
+                # the backend shuts down cleanly on SIGINT, not SIGTERM
+                command: ["/bin/sh", "-c", "kill -INT 1"]
+          startupProbe:
+            httpGet:
+              path: /version
+              port: api
+            periodSeconds: 3
+            failureThreshold: 40
+          readinessProbe:
+            httpGet:
+              path: /version
+              port: api
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /version
+              port: api
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              memory: 2Gi
+          securityContext:
+            # the image only runs as root; give it nothing beyond that
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: convex-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: convex
+  namespace: lendloop
+spec:
+  selector:
+    app: convex
+  ports:
+    - name: api
+      port: 3210
+      targetPort: api
+    - name: http-actions
+      port: 3211
+      targetPort: http-actions

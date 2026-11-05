@@ -1,0 +1,13 @@
+.git
+.next
+.convex
+.clerk
+node_modules
+.env*
+n8n
+k8s
+scripts
+deploy.sh
+README.md
+*.tsbuildinfo
+**/*.test.ts

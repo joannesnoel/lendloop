@@ -1,0 +1,50 @@
+# n8n plus a local mail catcher for LendLoop's automations.
+#
+#   cp n8n/.env.example n8n/.env      # then fill in the two secrets
+#   npm run n8n:setup                 # starts this stack, loads credentials + workflows
+#
+# Secrets are NOT passed to the n8n container as environment variables. The
+# setup script imports them into n8n's encrypted credential store instead, so
+# the only values workflows can read from $env are the non-secret ones below.
+
+name: lendloop
+
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.46.6
+    restart: unless-stopped
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: ${N8N_PUBLIC_URL:-http://localhost:5678}/
+      GENERIC_TIMEZONE: ${TZ:-UTC}
+      TZ: ${TZ:-UTC}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      # Workflows read the three non-secret settings below with $env.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      LENDLOOP_CONVEX_SITE_URL: ${LENDLOOP_CONVEX_SITE_URL:-http://host.docker.internal:3211}
+      LENDLOOP_FROM_EMAIL: ${LENDLOOP_FROM_EMAIL:-LendLoop <no-reply@lendloop.local>}
+      LENDLOOP_ALERT_EMAIL: ${LENDLOOP_ALERT_EMAIL:-ops@lendloop.local}
+    extra_hosts:
+      # Lets n8n reach a Convex backend running on the host (npx convex dev --local).
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows:ro
+    depends_on:
+      - mailpit
+
+  # Catches every email n8n sends so you can read it at http://localhost:8025.
+  # Swap the "LendLoop SMTP" credential for a real provider in production.
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+
+volumes:
+  n8n_data:

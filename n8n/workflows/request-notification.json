@@ -1,0 +1,256 @@
+{
+  "id": "LendLoopNotify01",
+  "name": "LendLoop - Request notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop/loan-events",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "e8f4b819-614c-5c8b-b9e5-a11cf4f6ccff",
+      "name": "Loan event webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "2ade4206-7320-5d61-9ac8-ba22085aff9d"
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "encoding": "hex",
+        "dataPropertyName": "expectedSignature",
+        "binaryData": true,
+        "binaryPropertyName": "data"
+      },
+      "id": "bbba2bf5-e8eb-58df-9969-d3f2956aa63a",
+      "name": "Compute expected signature",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "crypto": {
+          "id": "LendLoopHmacIn01",
+          "name": "LendLoop webhook signing secret (Convex to n8n)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Compare the signature Convex sent with the HMAC the previous node computed\n// over the raw request body, in constant time, and reject stale requests.\n// The secret itself never appears here: it stays in the Crypto credential.\nconst MAX_AGE_MS = 5 * 60 * 1000;\n\nconst received = String($json.headers['x-lendloop-signature'] ?? '').replace(/^sha256=/, '');\nconst expected = String($json.expectedSignature ?? '');\n\nlet mismatch = received.length ^ expected.length;\nfor (let i = 0; i < expected.length; i++) {\n  mismatch |= expected.charCodeAt(i) ^ (received.charCodeAt(i) || 0);\n}\n\nconst body = $json.body ?? {};\nconst age = Math.abs(Date.now() - Number(body.sentAt));\n\nlet reason = null;\nif (expected.length === 0 || mismatch !== 0) reason = 'Invalid signature';\nelse if (!(age <= MAX_AGE_MS)) reason = 'Stale or missing timestamp';\n\nif (reason !== null) return { json: { valid: false, reason } };\n\n// Pass on only the fields the notification needs.\nreturn {\n  json: {\n    valid: true,\n    eventId: body.eventId,\n    type: body.type,\n    recipient: body.recipient,\n    actorName: body.actorName,\n    loan: body.loan,\n  },\n};"
+      },
+      "id": "3be52a92-4627-56da-9e8f-2ef5d0d39902",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2f09cf14-a3a8-5375-81a3-50484419c2bc",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4738f855-0704-5020-8573-1526f78f181e",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const { type, recipient, actorName, loan } = $json;\nconst dates = loan.startDate === loan.endDate\n  ? loan.startDate\n  : `${loan.startDate} to ${loan.endDate}`;\n\nconst templates = {\n  'request.created': {\n    subject: `${actorName} wants to borrow your ${loan.toolName}`,\n    text: `${actorName} asked to borrow your ${loan.toolName} for ${dates}.\\n\\nOpen LendLoop to approve or decline the request.`,\n  },\n  'request.approved': {\n    subject: `Your request for ${loan.toolName} was approved`,\n    text: `${actorName} approved your request to borrow ${loan.toolName} for ${dates}.\\n\\nPlease return it by ${loan.endDate}.`,\n  },\n  'request.declined': {\n    subject: `Your request for ${loan.toolName} was declined`,\n    text: `Your request to borrow ${loan.toolName} for ${dates} was declined.`,\n  },\n  'request.cancelled': {\n    subject: `${actorName} cancelled their request for ${loan.toolName}`,\n    text: `${actorName} no longer needs your ${loan.toolName} for ${dates}. There is nothing you need to do.`,\n  },\n  'loan.returned': {\n    subject: `${loan.toolName} marked as returned`,\n    text: `${actorName} confirmed that ${loan.toolName} is back. Thanks for returning it!`,\n  },\n};\n\nconst template = templates[type];\nif (!template) throw new Error(`Unknown event type: ${type}`);\n\nreturn {\n  json: {\n    eventId: $json.eventId,\n    to: recipient.email,\n    subject: template.subject,\n    text: `Hi ${recipient.name},\\n\\n${template.text}\\n\\n\u2014 LendLoop`,\n  },\n};"
+      },
+      "id": "f4837b41-93d8-54c5-8f90-167a80f34e8c",
+      "name": "Compose notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.LENDLOOP_FROM_EMAIL }}",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "fe6ab535-563c-587b-84f7-19db1a7afbe2",
+      "name": "Send notification email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1100,
+        -100
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "LendLoopSmtp0001",
+          "name": "LendLoop SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, eventId: $('Compose notification').item.json.eventId } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "c8d0ca83-a373-595a-ba4d-ea3e60f81a5f",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.reason } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "8e42d906-0f2f-502f-a42d-7378ea697abe",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "Loan event webhook": {
+      "main": [
+        [
+          {
+            "node": "Compute expected signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute expected signature": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Compose notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose notification": {
+      "main": [
+        [
+          {
+            "node": "Send notification email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send notification email": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "LendLoopErrors01",
+    "saveDataErrorExecution": "all"
+  },
+  "active": false,
+  "pinData": {}
+}

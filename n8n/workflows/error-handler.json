@@ -1,0 +1,206 @@
+{
+  "id": "LendLoopErrors01",
+  "name": "LendLoop - Error handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1f5ce84b-3ed8-5380-a66c-fd96c7515689",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1ef03842-2cc8-5904-bf2d-b5a371bad804",
+              "name": "timestamp",
+              "value": "={{ Date.now().toString() }}",
+              "type": "string"
+            },
+            {
+              "id": "8e244c62-4131-5f99-9a0e-7027747c47aa",
+              "name": "workflowName",
+              "value": "={{ $json.workflow?.name ?? 'Unknown workflow' }}",
+              "type": "string"
+            },
+            {
+              "id": "6719d255-8cf8-5c58-99a0-a982e6e003a4",
+              "name": "message",
+              "value": "={{ $json.execution?.error?.message ?? $json.trigger?.error?.message ?? 'Unknown error' }}",
+              "type": "string"
+            },
+            {
+              "id": "a7a53ce7-04bf-5c69-b8a7-b7624ac01b92",
+              "name": "executionUrl",
+              "value": "={{ $json.execution?.url ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "0b66f962-616e-5776-90be-0f0768bb63c6",
+              "name": "body",
+              "value": "={{ JSON.stringify({ executionId: String($json.execution?.id ?? 'trigger-' + Date.now()), workflowName: $json.workflow?.name ?? 'Unknown workflow', nodeName: $json.execution?.lastNodeExecuted ?? '', message: $json.execution?.error?.message ?? $json.trigger?.error?.message ?? 'Unknown error', executionUrl: $json.execution?.url ?? '' }) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7cacf578-2c32-5783-8cda-57455e2cda70",
+      "name": "Build report",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "encoding": "hex",
+        "dataPropertyName": "signature",
+        "value": "={{ $json.timestamp }}.POST./n8n/workflow-errors.{{ $json.body }}"
+      },
+      "id": "bcd4e2e8-8c51-5d94-bcd6-381acba7f317",
+      "name": "Sign report",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "credentials": {
+        "crypto": {
+          "id": "LendLoopHmacOut1",
+          "name": "LendLoop API signing secret (n8n to Convex)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LENDLOOP_CONVEX_SITE_URL }}/n8n/workflow-errors",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "=sha256={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "d2a81593-dbb7-57d2-80ea-f708a7f64e16",
+      "name": "Report to LendLoop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.LENDLOOP_FROM_EMAIL }}",
+        "toEmail": "={{ $env.LENDLOOP_ALERT_EMAIL }}",
+        "subject": "=[LendLoop] Workflow failed: {{ $('Sign report').item.json.workflowName }}",
+        "emailFormat": "text",
+        "text": "=The n8n workflow \"{{ $('Sign report').item.json.workflowName }}\" failed.\n\nError: {{ $('Sign report').item.json.message }}\n\nExecution: {{ $('Sign report').item.json.executionUrl }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "ef15f21b-efa5-5daa-a185-b917f28e1408",
+      "name": "Email alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "LendLoopSmtp0001",
+          "name": "LendLoop SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Build report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build report": {
+      "main": [
+        [
+          {
+            "node": "Sign report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign report": {
+      "main": [
+        [
+          {
+            "node": "Report to LendLoop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report to LendLoop": {
+      "main": [
+        [
+          {
+            "node": "Email alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all"
+  },
+  "active": false,
+  "pinData": {}
+}

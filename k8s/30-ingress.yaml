@@ -1,0 +1,35 @@
+# One public hostname for both halves, reached through the Cloudflare Tunnel:
+#   /api  -> Convex client API (the browser's websocket and HTTP calls)
+#   /     -> the Next.js app
+# The Next.js app must therefore never define routes under /api.
+# Convex's HTTP actions (port 3211, used by n8n) are deliberately not exposed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lendloop
+  namespace: lendloop
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    # Convex clients hold a websocket open (/api/<version>/sync)
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: lendloop.creativelogik.net
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: convex
+                port:
+                  number: 3210
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80
