@@ -120,9 +120,14 @@ export const setRole = internalMutation({
       .withIndex("by_email", (q) => q.eq("email", email.trim().toLowerCase()))
       .first();
     if (!user) {
-      throw new Error(`No user with email ${email}. They must sign in once first.`);
+      // Returned, not thrown: the CLI hides thrown messages when the backend
+      // redacts errors, and "Server Error" tells an operator nothing.
+      return {
+        updated: false,
+        reason: `No account with email ${email}. They must sign in once first.`,
+      };
     }
     await ctx.db.patch(user._id, { role });
-    return { userId: user._id, role };
+    return { updated: true, userId: user._id, role };
   },
 });
